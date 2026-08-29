@@ -1,0 +1,22 @@
+{
+  "name": "kraya-print-service",
+  "version": "1.0.0",
+  "description": "Self-hosted print service for Vehicle Entry/Exit Slips",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "install-service:macos": "node scripts/install-macos.js",
+    "install-service:windows": "node scripts/install-windows.js"
+  },
+  "keywords": ["print", "printer", "service"],
+  "author": "Kraya",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {}
+}
