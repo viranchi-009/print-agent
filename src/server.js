@@ -147,57 +147,19 @@ app.post('/print', async (req, res) => {
           stdio: 'pipe'
         });
       } else if (isWindows) {
-        // Windows: Use PowerShell to directly submit to printer queue via System.Printing API
-        const escapedPath = tempFilePath.replace(/'/g, "''");
-        const escapedPrinter = printerName.replace(/'/g, "''");
+        // Windows: Simple approach - use native Windows print command
+        // This is the most basic and reliable method
+        const printCommand = `print /D:"${printerName}" "${tempFilePath}"`;
 
-        const psCommand = `
-          [System.Reflection.Assembly]::LoadWithPartialName("System.Printing") | Out-Null
-          [System.Reflection.Assembly]::LoadWithPartialName("System.Drawing") | Out-Null
+        console.log(`[PRINT] Executing: ${printCommand}`);
 
-          $file = '${escapedPath}'
-          $printerName = '${escapedPrinter}'
+        execSync(printCommand, {
+          stdio: 'pipe',
+          shell: 'cmd.exe',
+          timeout: 10000
+        });
 
-          try {
-            if (-not (Test-Path $file)) {
-              throw "File does not exist: $file"
-            }
-
-            $localPrintServer = New-Object System.Printing.LocalPrintServer
-            $printQueue = $localPrintServer.GetPrintQueue($printerName)
-
-            if ($printQueue -eq $null) {
-              throw "Printer not found: $printerName"
-            }
-
-            # Read file as bytes and submit to queue
-            $bytes = [System.IO.File]::ReadAllBytes($file)
-            $printJob = $printQueue.AddJob()
-            $printJob.JobStream.Write($bytes, 0, $bytes.Length)
-            $printJob.Commit()
-            $printQueue.Dispose()
-
-            Write-Host "SUCCESS: Print job submitted to $printerName"
-          }
-          catch {
-            Write-Host "ERROR: $_"
-            exit 1
-          }
-        `;
-
-        console.log(`[PRINT] Submitting to printer: ${printerName}`);
-        console.log(`[PRINT] File: ${tempFilePath}`);
-
-        try {
-          execSync(`powershell -NoProfile -Command "${psCommand}"`, {
-            stdio: ['pipe', 'pipe', 'pipe'],
-            encoding: 'utf-8',
-            timeout: 15000
-          });
-          console.log(`[PRINT] Job submitted to printer: ${printerName}`);
-        } catch (error) {
-          throw new Error(`Failed to submit print job: ${error.message}`);
-        }
+        console.log(`[PRINT] Command executed for printer: ${printerName}`);
       }
 
       // Clean up temp file with retry logic for Windows
