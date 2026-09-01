@@ -112,16 +112,28 @@ app.post('/print', async (req, res) => {
       });
     }
 
-    // Convert base64 PDF to buffer
-    const pdfBuffer = Buffer.from(pdfData, 'base64');
+    // Convert base64 PDF to buffer - trim whitespace first
+    const cleanBase64 = pdfData.trim().replace(/\s/g, '');
+    let pdfBuffer;
+    try {
+      pdfBuffer = Buffer.from(cleanBase64, 'base64');
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid base64 PDF data'
+      });
+    }
 
-    // Create temp file for PDF
-    const tempDir = path.join(__dirname, '../temp');
+    // Create temp file for PDF using OS temp directory for better reliability
+    const tempDir = isWindows
+      ? path.join(os.tmpdir(), 'kraya-print-service')
+      : path.join(__dirname, '../temp');
+
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
 
-    const tempFileName = `print_${Date.now()}.pdf`;
+    const tempFileName = `print_${Date.now()}_${Math.random().toString(36).slice(2, 11)}.pdf`;
     const tempFilePath = path.join(tempDir, tempFileName);
 
     // Write PDF to temp file
@@ -135,24 +147,63 @@ app.post('/print', async (req, res) => {
           stdio: 'pipe'
         });
       } else if (isWindows) {
-        execSync(`powershell -Command "& {Add-Type -AssemblyName System.Drawing; $printer = New-Object System.Drawing.Printing.PrinterSettings; $printer.PrinterName = '${printerName}'; if ($printer.IsValid) { Write-Host 'Printing...' } else { throw 'Invalid printer' }}"`, {
-          stdio: 'pipe'
-        });
-        // For Windows, use print command
-        execSync(`print /D:"${printerName}" "${tempFilePath}"`, {
+        // Windows: Use PowerShell to properly handle PDF printing
+        const escapedPath = tempFilePath.replace(/'/g, "''");
+        const escapedPrinter = printerName.replace(/'/g, "''");
+        const copies = printOptions.copies || 1;
+
+        const psCommand = `
+          $file = '${escapedPath}'
+          $printer = '${escapedPrinter}'
+          $copies = ${copies}
+
+          if (-not (Test-Path $file)) {
+            throw "File does not exist: $file"
+          }
+
+          Add-Type -AssemblyName System.Printing
+          $printQueue = [System.Printing.PrintQueue]::Open([System.Printing.LocalPrintServer]::new(), $printer)
+
+          if ($printQueue -eq $null) {
+            throw "Printer not found: $printer"
+          }
+
+          $printJob = $printQueue.AddJob()
+          $fileStream = [System.IO.File]::OpenRead($file)
+          $printJob.JobStream.Write($fileStream, 0, $fileStream.Length)
+          $fileStream.Close()
+          $printJob.Commit()
+          $printQueue.Dispose()
+
+          Write-Host "Print job sent successfully"
+        `;
+
+        execSync(`powershell -NoProfile -Command "${psCommand}"`, {
           stdio: 'pipe',
-          shell: 'cmd.exe'
+          encoding: 'utf-8'
         });
       }
 
-      // Clean up temp file after a delay
-      setTimeout(() => {
-        try {
-          fs.unlinkSync(tempFilePath);
-        } catch (err) {
-          console.error('Error deleting temp file:', err);
-        }
-      }, 2000);
+      // Clean up temp file with retry logic for Windows
+      const cleanupWithRetry = (filePath, retries = 5, delay = 500) => {
+        setTimeout(() => {
+          try {
+            if (fs.existsSync(filePath)) {
+              fs.unlinkSync(filePath);
+              console.log(`Cleaned up temp file: ${filePath}`);
+            }
+          } catch (err) {
+            if (retries > 0) {
+              console.warn(`Retry cleanup (${retries} left): ${err.message}`);
+              cleanupWithRetry(filePath, retries - 1, delay);
+            } else {
+              console.error('Failed to delete temp file after retries:', filePath, err.message);
+            }
+          }
+        }, delay);
+      };
+
+      cleanupWithRetry(tempFilePath);
 
       res.json({
         success: true,
@@ -162,7 +213,9 @@ app.post('/print', async (req, res) => {
     } catch (err) {
       // Clean up on error
       try {
-        fs.unlinkSync(tempFilePath);
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
+        }
       } catch (e) {
         console.error('Error deleting temp file:', e);
       }
