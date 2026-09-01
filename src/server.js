@@ -147,57 +147,42 @@ app.post('/print', async (req, res) => {
           stdio: 'pipe'
         });
       } else if (isWindows) {
-        // Windows: Use PowerShell to properly handle PDF printing
-        const escapedPath = tempFilePath.replace(/'/g, "''");
-        const escapedPrinter = printerName.replace(/'/g, "''");
-        const copies = printOptions.copies || 1;
+        // Windows: Use rundll32 printui API which reliably submits to printer queue
+        const escapedPath = tempFilePath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        const escapedPrinter = printerName.replace(/"/g, '\\"');
 
-        const psCommand = `
-          $file = '${escapedPath}'
-          $printer = '${escapedPrinter}'
-          $copies = ${copies}
+        // Use rundll32 printui.dll which is the native Windows print dialog API
+        // /p = print file, /n = printer name, /t = temporary print file mode
+        const printCommand = `rundll32 printui.dll,PrintUIEntry /p /n "${escapedPrinter}" "${escapedPath}"`;
 
-          if (-not (Test-Path $file)) {
-            throw "File does not exist: $file"
-          }
+        console.log(`[PRINT] Executing: ${printCommand}`);
 
-          Add-Type -AssemblyName System.Printing
-          $printQueue = [System.Printing.PrintQueue]::Open([System.Printing.LocalPrintServer]::new(), $printer)
-
-          if ($printQueue -eq $null) {
-            throw "Printer not found: $printer"
-          }
-
-          $printJob = $printQueue.AddJob()
-          $fileStream = [System.IO.File]::OpenRead($file)
-          $printJob.JobStream.Write($fileStream, 0, $fileStream.Length)
-          $fileStream.Close()
-          $printJob.Commit()
-          $printQueue.Dispose()
-
-          Write-Host "Print job sent successfully"
-        `;
-
-        execSync(`powershell -NoProfile -Command "${psCommand}"`, {
-          stdio: 'pipe',
-          encoding: 'utf-8'
+        execSync(printCommand, {
+          stdio: ['pipe', 'pipe', 'pipe'],
+          shell: true,
+          windowsHide: true,
+          timeout: 10000
         });
+
+        console.log(`[PRINT] Job submitted to printer: ${printerName}`);
       }
 
       // Clean up temp file with retry logic for Windows
-      const cleanupWithRetry = (filePath, retries = 5, delay = 500) => {
+      // Increase delay on Windows since spooler needs more time to grab the file
+      const baseDelay = isWindows ? 3000 : 2000;
+      const cleanupWithRetry = (filePath, retries = 8, delay = baseDelay) => {
         setTimeout(() => {
           try {
             if (fs.existsSync(filePath)) {
               fs.unlinkSync(filePath);
-              console.log(`Cleaned up temp file: ${filePath}`);
+              console.log(`[CLEANUP] Removed temp file: ${filePath}`);
             }
           } catch (err) {
             if (retries > 0) {
-              console.warn(`Retry cleanup (${retries} left): ${err.message}`);
+              console.warn(`[CLEANUP] Retry (${retries} left): ${err.message}`);
               cleanupWithRetry(filePath, retries - 1, delay);
             } else {
-              console.error('Failed to delete temp file after retries:', filePath, err.message);
+              console.error(`[CLEANUP] Failed to delete after retries: ${filePath}`, err.message);
             }
           }
         }, delay);
