@@ -73,6 +73,75 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Test print with static PDF file
+app.get('/print-test', async (req, res) => {
+  try {
+    const printerName = req.query.printer;
+
+    if (!printerName) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing printer query parameter. Usage: /print-test?printer=PrinterName'
+      });
+    }
+
+    // Path to test PDF file
+    const testPdfPath = path.join(__dirname, '../test/sample.pdf');
+
+    if (!fs.existsSync(testPdfPath)) {
+      return res.status(404).json({
+        success: false,
+        error: `Test PDF not found at: ${testPdfPath}. Please add a sample.pdf file to the test folder.`
+      });
+    }
+
+    // Validate printer exists
+    const printers = getPrinters();
+    const printerExists = printers.some(p => p.name === printerName);
+
+    if (!printerExists) {
+      return res.status(404).json({
+        success: false,
+        error: `Printer "${printerName}" not found. Available: ${printers.map(p => p.name).join(', ')}`
+      });
+    }
+
+    // Use test PDF directly (no temp file, just read and print)
+    try {
+      if (isMacOS) {
+        const copies = 1;
+        execSync(`lp -n ${copies} -d "${printerName}" "${testPdfPath}"`, {
+          stdio: 'pipe'
+        });
+      } else if (isWindows) {
+        const printCommand = `print /D:"${printerName}" "${testPdfPath}"`;
+        console.log(`[PRINT-TEST] Executing: ${printCommand}`);
+        execSync(printCommand, {
+          stdio: 'pipe',
+          shell: 'cmd.exe',
+          timeout: 10000
+        });
+      }
+
+      res.json({
+        success: true,
+        message: `Test PDF printed to ${printerName}`,
+        pdfPath: testPdfPath
+      });
+    } catch (err) {
+      res.status(500).json({
+        success: false,
+        error: err.message || 'Failed to print test PDF'
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // List available printers
 app.get('/printers', (req, res) => {
   try {
@@ -240,6 +309,7 @@ app.listen(PORT, HOST, () => {
   console.log(`   Platform: ${PLATFORM === 'darwin' ? 'macOS' : PLATFORM === 'win32' ? 'Windows' : 'Linux'}`);
   console.log(`\n   GET  /health              - Check service status`);
   console.log(`   GET  /printers            - List available printers`);
+  console.log(`   GET  /print-test          - Test print with static PDF (add ?printer=PrinterName)`);
   console.log(`   POST /print               - Print PDF (base64 encoded)`);
   console.log(`   POST /print-html          - Print HTML`);
   console.log('');
